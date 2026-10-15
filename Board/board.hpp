@@ -328,6 +328,7 @@ namespace chess
         }
         void clear_board()
         {
+            en_passant = No_Square;
             for (Piece &piece : table)
             {
                 piece = No_Piece;
