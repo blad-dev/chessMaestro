@@ -192,6 +192,83 @@ void test_stalemate_and_fen_persistence() {
     std::cout << "[PASS] test_stalemate_and_fen_persistence\n";
 }
 
+void test_ai_integration() {
+    GameController gc;
+    gc.set_game_mode(GameMode::PvC);
+    gc.set_ai_difficulty(Easy);
+    gc.set_human_color(White);
+
+    // 1. Human (White) plays e2e4
+    assert(gc.make_move(SQ_E2, SQ_E4));
+    assert(gc.get_turn() == Black);
+    assert(gc.is_ai_turn());
+
+    // 2. Start AI move
+    gc.start_ai_thinking();
+    assert(gc.is_ai_thinking());
+
+    // 3. Poll until complete
+    int poll_count = 0;
+    while (!gc.update_ai_thinking()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        ++poll_count;
+        assert(poll_count < 1000); // Should finish within 5 seconds on Easy
+    }
+
+    assert(!gc.is_ai_thinking());
+    assert(gc.get_turn() == White); // Turn returned to Human!
+    assert(!gc.get_last_move().is_no_move());
+    std::cout << "  AI played: " << gc.get_last_move() << '\n';
+
+    // 4. Test AI playing White (Human is Black)
+    gc.reset_to_start();
+    gc.set_game_mode(GameMode::PvC);
+    gc.set_ai_difficulty(Easy);
+    gc.set_human_color(Black);
+
+    assert(gc.get_turn() == White);
+    assert(gc.is_ai_turn());
+
+    gc.start_ai_thinking();
+    assert(gc.is_ai_thinking());
+
+    poll_count = 0;
+    while (!gc.update_ai_thinking()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        ++poll_count;
+        assert(poll_count < 1000);
+    }
+
+    assert(!gc.is_ai_thinking());
+    assert(gc.get_turn() == Black); // Turn switched to Human!
+    assert(!gc.get_last_move().is_no_move());
+    std::cout << "  AI (as White) played: " << gc.get_last_move() << '\n';
+
+    // 5. Test AI cancellation mid-search on Hard difficulty (800,000 nodes)
+    gc.reset_to_start();
+    gc.set_game_mode(GameMode::PvC);
+    gc.set_ai_difficulty(Hard);
+    gc.set_human_color(Black);
+
+    gc.start_ai_thinking();
+    assert(gc.is_ai_thinking());
+
+    // Let it run for 20ms into the deep search
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    assert(gc.is_ai_thinking());
+
+    // Measure cancellation time
+    auto cancel_start = std::chrono::steady_clock::now();
+    gc.cancel_ai();
+    auto cancel_dur = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - cancel_start).count();
+
+    assert(!gc.is_ai_thinking());
+    assert(cancel_dur < 100); // Must interrupt immediately (<100ms instead of 3000ms)
+    std::cout << "  AI cancelled mid-search in: " << cancel_dur << " ms\n";
+
+    std::cout << "[PASS] test_ai_integration\n";
+}
+
 int main() {
     std::cout << "Running GameController Unit Tests...\n";
     test_initial_position();
@@ -201,6 +278,7 @@ int main() {
     test_castling_and_promotion();
     test_en_passant();
     test_stalemate_and_fen_persistence();
+    test_ai_integration();
     std::cout << "All GameController Unit Tests Passed Successfully!\n";
     return 0;
 }
