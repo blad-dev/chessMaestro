@@ -4,9 +4,15 @@
 #include <vector>
 #include <optional>
 #include <fstream>
+#include <future>
+#include <chrono>
+#include <memory>
+#include <cstdlib>
 #include "Board/board.hpp"
 #include "MainLogic/movegen.hpp"
 #include "MainLogic/fenParser.hpp"
+#include "MainLogic/PlayerVComputer.hpp"
+#include "ai.hpp"
 
 namespace chess {
 
@@ -19,6 +25,11 @@ enum class GameStatus {
     Resigned
 };
 
+enum class GameMode {
+    PvP,
+    PvC
+};
+
 class GameController {
 private:
     Board board;
@@ -29,6 +40,21 @@ private:
     Boardlist<103> boardlist;
     Hashlist<1000> hashlist;
     Hashlist_ref hashlist_ref;
+
+    // AI search structures
+    Board search_board;
+    Movelist<10000> search_movelist;
+    Movelist_ref search_movelist_ref;
+    Hashlist<1000> search_hashlist;
+    Hashlist_ref search_hashlist_ref;
+    std::unique_ptr<AI> bot;
+    std::future<Move_full_info> ai_future;
+    bool ai_thinking = false;
+
+    // Configuration
+    GameMode game_mode = GameMode::PvP;
+    Difficulty ai_difficulty = Normal;
+    Color human_color = White;
 
     GameStatus status = GameStatus::Active;
     PositionState position_state = quite;
@@ -80,15 +106,37 @@ public:
     GameController() 
         : movelist_ref(movelist),
           movegen(board, movelist_ref),
-          hashlist_ref(hashlist) {
+          hashlist_ref(hashlist),
+          search_movelist_ref(search_movelist),
+          search_hashlist_ref(search_hashlist) {
+        bot = std::make_unique<AI>(search_board, search_movelist_ref);
         reset_to_start();
     }
 
+    ~GameController() {
+        cancel_ai();
+    }
+
+    void cancel_ai() {
+        if (ai_thinking) {
+            if (bot) {
+                bot->stop();
+            }
+            if (ai_future.valid()) {
+                ai_future.wait();
+            }
+            ai_thinking = false;
+        }
+    }
+
     void reset_to_start() {
+        cancel_ai();
+        if (bot) bot->clear_hash();
         load_fen(START_POS);
     }
 
     bool load_fen(const std::string& fen) {
+        cancel_ai();
         try {
             board.clear_board();
             parser.parse_from_FEN(fen, board);
@@ -138,7 +186,84 @@ public:
         return load_fen(fen);
     }
 
+    // --- Mode & AI Configuration ---
+    void set_game_mode(GameMode mode) {
+        if (game_mode != mode) {
+            cancel_ai();
+            game_mode = mode;
+        }
+    }
+
+    GameMode get_game_mode() const {
+        return game_mode;
+    }
+
+    void set_ai_difficulty(Difficulty diff) {
+        ai_difficulty = diff;
+    }
+
+    Difficulty get_ai_difficulty() const {
+        return ai_difficulty;
+    }
+
+    void set_human_color(Color col) {
+        if (human_color != col) {
+            cancel_ai();
+            human_color = col;
+        }
+    }
+
+    Color get_human_color() const {
+        return human_color;
+    }
+
+    bool is_ai_turn() const {
+        return game_mode == GameMode::PvC && 
+               status == GameStatus::Active && 
+               board.get_turn() != human_color;
+    }
+
+    bool is_ai_thinking() const {
+        return ai_thinking;
+    }
+
+    void start_ai_thinking() {
+        if (ai_thinking || status != GameStatus::Active) return;
+
+        search_board = board;
+        search_hashlist = hashlist;
+        search_hashlist_ref = Hashlist_ref(search_hashlist);
+
+        int limit = static_cast<int>(ai_difficulty);
+        int rand_factor = std::max(1, limit / 2);
+        uint64_t nodes_limit = limit + (std::rand() % rand_factor);
+        int last_move_id = (last_move.is_no_move()) ? No_Square : static_cast<int>(last_move.to_square);
+
+        ai_thinking = true;
+        ai_future = std::async(std::launch::async, [this, nodes_limit, last_move_id]() {
+            auto [best_move, eval] = bot->best_move_nodes_limit(nodes_limit, search_hashlist_ref, last_move_id);
+            bot->hash_aging(2);
+            return best_move;
+        });
+    }
+
+    bool update_ai_thinking() {
+        if (!ai_thinking) return false;
+
+        if (ai_future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+            Move_full_info best_move = ai_future.get();
+            ai_thinking = false;
+            if (!best_move.is_no_move()) {
+                make_move(best_move);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // --- State Queries ---
     void resign(Color player) {
+        cancel_ai();
         status = GameStatus::Resigned;
         resigned_player = player;
     }
@@ -216,14 +341,17 @@ public:
     }
 
     bool is_square_selectable(Square sq) const {
-        if (sq >= 64 || status != GameStatus::Active) return false;
+        if (sq >= 64 || status != GameStatus::Active || ai_thinking) return false;
+        // In PvC mode, human can only select their own pieces
+        if (game_mode == GameMode::PvC && board.get_turn() != human_color) return false;
+
         Piece p = board[sq];
         if (p == No_Piece) return false;
         return piece_color(p) == board.get_turn();
     }
 
     bool select_square(Square sq) {
-        if (status != GameStatus::Active) {
+        if (status != GameStatus::Active || ai_thinking) {
             selected_square = No_Square;
             return false;
         }
