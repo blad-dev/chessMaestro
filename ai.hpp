@@ -4,6 +4,7 @@
 #include "Board/transposition_hashtable.hpp"
 #include <cassert>
 #include <unordered_map>
+#include <atomic>
 namespace chess
 {
     class AI
@@ -13,6 +14,7 @@ namespace chess
         Movelist_ref &global_movelist_ref;
 
         transposition_moves_table better_hashtable;
+        std::atomic<bool> stop_flag{false};
 
         template <Color color>
         int64_t perft(int d, Movelist_ref list_ref)
@@ -129,6 +131,7 @@ namespace chess
         template <Color clr>
         int q_search_ab(int alpha, int beta, Movelist_ref list_ref, const int last_move_id)
         {
+            if (stop_flag) return 0;
             ++all_nodes;
             Movegen generator(brd, list_ref);
             PositionState state;
@@ -162,6 +165,7 @@ namespace chess
         template <Color clr>
         int negamax_ab_with_order_and_hash(int d, int alpha, int beta, Movelist_ref list_ref, const int last_move_id, u64 hash, Hashlist_ref hashlist_ref)
         {
+            if (stop_flag) return 0;
             if ((hashlist_ref.contains_count(hash) >= 2) || (brd.get_fifty_rule() >= 100))
                 return 0;
             hashlist_ref.add(hash);
@@ -207,6 +211,7 @@ namespace chess
 
             for (Move_full_info *i = list_ref.begin; i != list_ref.end; ++i)
             {
+                if (stop_flag) return 0;
                 u64 new_hash = brd.get_hash<clr>(hash, *i);
                 Hashlist_ref new_hashlist;
                 if ((brd[i->from_square] == Pawn_with_color<clr>()) || (brd[i->to_square] != No_Piece))
@@ -265,6 +270,7 @@ namespace chess
 
             for (Move_full_info *i = global_movelist_ref.begin; i != global_movelist_ref.end; ++i)
             {
+                if (stop_flag) break;
                 u64 new_hash = brd.get_hash<clr>(hash, *i);
                 Hashlist_ref new_hashlist;
                 if ((brd[i->from_square] == Pawn_with_color<clr>()) || (brd[i->to_square] != No_Piece))
@@ -308,14 +314,31 @@ namespace chess
 
         std::tuple<Move_full_info, int> best_move_nodes_limit(uint64_t nodes_limit, Hashlist_ref hashlist_ref, const int last_move_id = No_Square)
         {
+            stop_flag = false;
             all_nodes = 0;
             std::tuple<Move_full_info, int> return_info;
             for (int i = 1; (all_nodes < nodes_limit) && (i < 100); ++i)
             {
+                if (stop_flag) break;
                 all_nodes = 0;
                 return_info = best_move_ab_with_order_and_hash(i, hashlist_ref, last_move_id);
             }
             return return_info;
+        }
+
+        void stop()
+        {
+            stop_flag = true;
+        }
+
+        void reset_stop()
+        {
+            stop_flag = false;
+        }
+
+        bool is_stopped() const
+        {
+            return stop_flag;
         }
 
         void clear_hash()
