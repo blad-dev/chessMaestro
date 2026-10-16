@@ -180,10 +180,18 @@ int main() {
         if (controller.get_game_mode() != chess::GameMode::PvC) return;
         controller.cancel_ai();
         isPromoting = false;
+        controller.deselect();
         chess::Color nextColor = (controller.get_human_color() == chess::White) ? chess::Black : chess::White;
         controller.set_human_color(nextColor);
-        boardFlipped = (nextColor == chess::Black);
-        controller.reset_to_start();
+        if (autoFlip) {
+            bool desiredFlipped = (nextColor == chess::Black);
+            if (boardFlipped != desiredFlipped) {
+                boardFlipped = desiredFlipped;
+            }
+        }
+        if (controller.is_ai_turn() && controller.get_status() == chess::GameStatus::Active) {
+            controller.start_ai_thinking();
+        }
         toastMessage = "Playing as: " + std::string(nextColor == chess::White ? "White" : "Black");
         toastColor = sf::Color(144, 202, 249);
         toastTimer = 2.0f;
