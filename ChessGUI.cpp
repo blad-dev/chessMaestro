@@ -137,7 +137,10 @@ int main() {
 
     auto cycleDifficulty = [&]() {
         if (controller.get_game_mode() != chess::GameMode::PvC) return;
+        
+        bool wasThinking = controller.is_ai_thinking();
         controller.cancel_ai();
+
         auto diff = controller.get_ai_difficulty();
         std::string diffName;
         if (diff == chess::Easy) {
@@ -150,8 +153,13 @@ int main() {
             controller.set_ai_difficulty(chess::Easy);
             diffName = "Easy";
         }
-        controller.reset_to_start();
-        isPromoting = false;
+
+        if ((wasThinking || controller.is_ai_turn()) && 
+            controller.get_status() == chess::GameStatus::Active && 
+            !isPromoting) {
+            controller.start_ai_thinking();
+        }
+
         toastMessage = "AI Difficulty: " + diffName;
         toastColor = sf::Color(144, 202, 249);
         toastTimer = 2.0f;
