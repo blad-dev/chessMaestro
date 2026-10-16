@@ -88,6 +88,7 @@ int main() {
 
     // View & state options
     bool boardFlipped = false;
+    bool autoFlip = false;
     bool isPromoting = false;
     chess::Square promoFrom = chess::No_Square;
     chess::Square promoTo = chess::No_Square;
@@ -118,6 +119,16 @@ int main() {
 
     const sf::Color lightSquare(240, 217, 181);
     const sf::Color darkSquare(181, 136, 99);
+
+    auto handleAutoFlipAfterMove = [&]() {
+        if (!autoFlip) return;
+        if (controller.get_game_mode() == chess::GameMode::PvP) {
+            bool desiredFlipped = (controller.get_turn() == chess::Black);
+            if (boardFlipped != desiredFlipped) {
+                boardFlipped = desiredFlipped;
+            }
+        }
+    };
 
     auto toggleMode = [&]() {
         controller.cancel_ai();
@@ -185,10 +196,33 @@ int main() {
         toastTimer = 1.5f;
     };
 
+    auto toggleAutoFlip = [&]() {
+        autoFlip = !autoFlip;
+        if (autoFlip) {
+            if (controller.get_game_mode() == chess::GameMode::PvP) {
+                bool desiredFlipped = (controller.get_turn() == chess::Black);
+                if (boardFlipped != desiredFlipped) boardFlipped = desiredFlipped;
+            } else if (controller.get_game_mode() == chess::GameMode::PvC) {
+                if (!controller.is_ai_turn()) {
+                    bool desiredFlipped = (controller.get_human_color() == chess::Black);
+                    if (boardFlipped != desiredFlipped) boardFlipped = desiredFlipped;
+                }
+            }
+        }
+        toastMessage = autoFlip ? "Auto-flip: ON" : "Auto-flip: OFF";
+        toastColor = autoFlip ? sf::Color(129, 199, 132) : sf::Color(200, 200, 200);
+        toastTimer = 1.5f;
+    };
+
     auto resetGame = [&]() {
         controller.cancel_ai();
         isPromoting = false;
         controller.reset_to_start();
+        if (controller.get_game_mode() == chess::GameMode::PvC) {
+            boardFlipped = (controller.get_human_color() == chess::Black);
+        } else {
+            boardFlipped = false;
+        }
         toastMessage = "New game started";
         toastColor = sf::Color(200, 200, 200);
         toastTimer = 1.5f;
@@ -240,17 +274,25 @@ int main() {
         }
 
         if (controller.is_ai_thinking()) {
-            controller.update_ai_thinking();
+            if (controller.update_ai_thinking()) {
+                if (autoFlip && controller.get_game_mode() == chess::GameMode::PvC) {
+                    bool desiredFlipped = (controller.get_human_color() == chess::Black);
+                    if (boardFlipped != desiredFlipped) {
+                        boardFlipped = desiredFlipped;
+                    }
+                }
+            }
         }
 
         // --- Toolbar Buttons Setup ---
-        // Row 1 (y = 630): Mode, Difficulty, Color, Flip
+        // Row 1 (y = 630): Mode, Difficulty, Color, Flip, Auto-Flip
         constexpr float btnY1 = boardTop + BoardSize + 30.0f;
         constexpr float btnHeight = 28.0f;
-        Button btnMode{sf::FloatRect(boardLeft, btnY1, 115.0f, btnHeight), ""};
-        Button btnDiff{sf::FloatRect(boardLeft + 122.0f, btnY1, 115.0f, btnHeight), ""};
-        Button btnColor{sf::FloatRect(boardLeft + 244.0f, btnY1, 115.0f, btnHeight), ""};
-        Button btnFlip{sf::FloatRect(boardLeft + 366.0f, btnY1, 114.0f, btnHeight), boardFlipped ? "[F] Flipped" : "[F] Normal"};
+        Button btnMode{sf::FloatRect(boardLeft, btnY1, 88.0f, btnHeight), ""};
+        Button btnDiff{sf::FloatRect(boardLeft + 94.0f, btnY1, 86.0f, btnHeight), ""};
+        Button btnColor{sf::FloatRect(boardLeft + 186.0f, btnY1, 86.0f, btnHeight), ""};
+        Button btnFlip{sf::FloatRect(boardLeft + 278.0f, btnY1, 80.0f, btnHeight), boardFlipped ? "[F] Flipped" : "[F] Normal"};
+        Button btnAutoFlip{sf::FloatRect(boardLeft + 364.0f, btnY1, 116.0f, btnHeight), autoFlip ? "[A] Auto-Flip: ON" : "[A] Auto-Flip: OFF"};
 
         btnMode.text = (controller.get_game_mode() == chess::GameMode::PvP) ? "[M] PvP" : "[M] vs AI";
         if (controller.get_game_mode() == chess::GameMode::PvC) {
@@ -295,6 +337,8 @@ int main() {
                     toggleHumanColor();
                 } else if (event.key.code == sf::Keyboard::F) {
                     toggleFlip();
+                } else if (event.key.code == sf::Keyboard::A) {
+                    toggleAutoFlip();
                 } else if (event.key.code == sf::Keyboard::S) {
                     saveGame();
                 } else if (event.key.code == sf::Keyboard::L) {
@@ -315,6 +359,8 @@ int main() {
                     toggleHumanColor();
                 } else if (btnFlip.bounds.contains(mx, my)) {
                     toggleFlip();
+                } else if (btnAutoFlip.bounds.contains(mx, my)) {
+                    toggleAutoFlip();
                 }
                 // Row 2 Buttons
                 else if (btnSave.bounds.contains(mx, my)) {
@@ -348,7 +394,9 @@ int main() {
                         float by = startY;
                         sf::FloatRect boxRect(bx, by, boxSize, boxSize);
                         if (boxRect.contains(mx, my)) {
-                            controller.make_move(promoFrom, promoTo, promos[i]);
+                            if (controller.make_move(promoFrom, promoTo, promos[i])) {
+                                handleAutoFlipAfterMove();
+                            }
                             isPromoting = false;
                             break;
                         }
@@ -382,7 +430,9 @@ int main() {
                                             promoFrom = currentSelected;
                                             promoTo = clickedSq;
                                         } else {
-                                            controller.make_move(currentSelected, clickedSq);
+                                            if (controller.make_move(currentSelected, clickedSq)) {
+                                                handleAutoFlipAfterMove();
+                                            }
                                         }
                                     } else if (controller.is_square_selectable(clickedSq)) {
                                         controller.select_square(clickedSq);
@@ -467,7 +517,7 @@ int main() {
             centerText(toast, static_cast<float>(WindowWidth) / 2.0f, 84.0f);
             window.draw(toast);
         } else {
-            sf::Text hintText("Click to move | [S]ave [L]oad [F]lip [Q]Resign [R]eset [Esc]Exit", uiFont, 12);
+            sf::Text hintText("Click to move | [S]ave [L]oad [F]lip [A]uto-flip [Q]Resign [R]eset [Esc]Exit", uiFont, 12);
             hintText.setFillColor(sf::Color(135, 135, 135));
             centerText(hintText, static_cast<float>(WindowWidth) / 2.0f, 84.0f);
             window.draw(hintText);
@@ -668,15 +718,30 @@ int main() {
 
         // 10. Toolbar Buttons
         auto drawButton = [&](const Button& btn) {
+            bool isToggledOn = (btn.text.find(": ON") != std::string::npos);
             sf::RectangleShape bShape(sf::Vector2f(btn.bounds.width, btn.bounds.height));
             bShape.setPosition(btn.bounds.left, btn.bounds.top);
-            bShape.setFillColor(btn.active ? sf::Color(45, 52, 60) : sf::Color(35, 38, 42));
+            if (!btn.active) {
+                bShape.setFillColor(sf::Color(35, 38, 42));
+                bShape.setOutlineColor(sf::Color(50, 53, 56));
+            } else if (isToggledOn) {
+                bShape.setFillColor(sf::Color(40, 56, 48));
+                bShape.setOutlineColor(sf::Color(100, 180, 110));
+            } else {
+                bShape.setFillColor(sf::Color(45, 52, 60));
+                bShape.setOutlineColor(sf::Color(70, 80, 92));
+            }
             bShape.setOutlineThickness(1.0f);
-            bShape.setOutlineColor(btn.active ? sf::Color(70, 80, 92) : sf::Color(50, 53, 56));
             window.draw(bShape);
 
             sf::Text bText(btn.text, uiFont, 12);
-            bText.setFillColor(btn.active ? sf::Color(220, 220, 220) : sf::Color(100, 100, 100));
+            if (!btn.active) {
+                bText.setFillColor(sf::Color(100, 100, 100));
+            } else if (isToggledOn) {
+                bText.setFillColor(sf::Color(165, 214, 167));
+            } else {
+                bText.setFillColor(sf::Color(220, 220, 220));
+            }
             centerText(bText, btn.bounds.left + btn.bounds.width / 2.0f, btn.bounds.top + btn.bounds.height / 2.0f);
             window.draw(bText);
         };
@@ -686,6 +751,7 @@ int main() {
         drawButton(btnDiff);
         drawButton(btnColor);
         drawButton(btnFlip);
+        drawButton(btnAutoFlip);
 
         // Row 2
         drawButton(btnSave);
