@@ -8,7 +8,7 @@
 
 namespace {
 constexpr unsigned int WindowWidth = 840;
-constexpr unsigned int WindowHeight = 740;
+constexpr unsigned int WindowHeight = 760;
 constexpr float BoardSize = 480.0f;
 constexpr float SquareSize = BoardSize / 8.0f;
 
@@ -35,26 +35,6 @@ void centerText(sf::Text& text, float centerX, float centerY) {
     text.setOrigin(bounds.left + bounds.width / 2.0f,
                    bounds.top + bounds.height / 2.0f);
     text.setPosition(centerX, centerY);
-}
-
-std::vector<sf::RectangleShape> createBoard(float left, float top) {
-    std::vector<sf::RectangleShape> squares;
-    squares.reserve(64);
-
-    const sf::Color lightSquare(240, 217, 181);
-    const sf::Color darkSquare(181, 136, 99);
-
-    for (unsigned int row = 0; row < 8; ++row) {
-        for (unsigned int column = 0; column < 8; ++column) {
-            sf::RectangleShape square(sf::Vector2f(SquareSize, SquareSize));
-            square.setPosition(left + static_cast<float>(column) * SquareSize,
-                               top + static_cast<float>(row) * SquareSize);
-            square.setFillColor(((row + column) % 2 == 0) ? lightSquare : darkSquare);
-            squares.push_back(square);
-        }
-    }
-
-    return squares;
 }
 
 struct Button {
@@ -102,59 +82,150 @@ int main() {
     const float spriteScale = SquareSize / pieceTextureWidth;
 
     constexpr float boardLeft = (static_cast<float>(WindowWidth) - BoardSize) / 2.0f;
-    constexpr float boardTop = 120.0f;
-    const std::vector<sf::RectangleShape> boardSquares = createBoard(boardLeft, boardTop);
+    constexpr float boardTop = 115.0f;
 
     chess::GameController controller;
 
-    // Promotion pending state
+    // View & state options
+    bool boardFlipped = false;
     bool isPromoting = false;
     chess::Square promoFrom = chess::No_Square;
     chess::Square promoTo = chess::No_Square;
 
+    // Toast feedback notification
+    std::string toastMessage;
+    sf::Color toastColor = sf::Color(129, 199, 132);
+    float toastTimer = 0.0f;
+
+    sf::Clock frameClock;
     sf::Clock animClock;
+
+    // Coordinate conversion lambdas (handles board flipping)
+    auto getSquareAtVisual = [&](int row, int col) -> chess::Square {
+        if (row < 0 || row > 7 || col < 0 || col > 7) return chess::No_Square;
+        int rank = boardFlipped ? row : (7 - row);
+        int file = boardFlipped ? (7 - col) : col;
+        return static_cast<chess::Square>(rank * 8 + file);
+    };
+
+    auto getVisualAtSquare = [&](chess::Square sq) -> std::pair<int, int> {
+        int file = sq % 8;
+        int rank = sq / 8;
+        int col = boardFlipped ? (7 - file) : file;
+        int row = boardFlipped ? rank : (7 - rank);
+        return {row, col};
+    };
+
+    const sf::Color lightSquare(240, 217, 181);
+    const sf::Color darkSquare(181, 136, 99);
 
     auto toggleMode = [&]() {
         controller.cancel_ai();
         isPromoting = false;
         if (controller.get_game_mode() == chess::GameMode::PvP) {
             controller.set_game_mode(chess::GameMode::PvC);
+            boardFlipped = (controller.get_human_color() == chess::Black);
         } else {
             controller.set_game_mode(chess::GameMode::PvP);
+            boardFlipped = false;
         }
         controller.reset_to_start();
+        toastMessage = (controller.get_game_mode() == chess::GameMode::PvP) ? "Mode: Two-Player" : "Mode: vs AI";
+        toastColor = sf::Color(144, 202, 249);
+        toastTimer = 2.0f;
     };
 
     auto cycleDifficulty = [&]() {
         if (controller.get_game_mode() != chess::GameMode::PvC) return;
         controller.cancel_ai();
         auto diff = controller.get_ai_difficulty();
+        std::string diffName;
         if (diff == chess::Easy) {
             controller.set_ai_difficulty(chess::Normal);
+            diffName = "Normal";
         } else if (diff == chess::Normal) {
             controller.set_ai_difficulty(chess::Hard);
+            diffName = "Hard";
         } else {
             controller.set_ai_difficulty(chess::Easy);
+            diffName = "Easy";
         }
         controller.reset_to_start();
         isPromoting = false;
+        toastMessage = "AI Difficulty: " + diffName;
+        toastColor = sf::Color(144, 202, 249);
+        toastTimer = 2.0f;
     };
 
     auto toggleHumanColor = [&]() {
         if (controller.get_game_mode() != chess::GameMode::PvC) return;
         controller.cancel_ai();
         isPromoting = false;
-        controller.set_human_color(controller.get_human_color() == chess::White ? chess::Black : chess::White);
+        chess::Color nextColor = (controller.get_human_color() == chess::White) ? chess::Black : chess::White;
+        controller.set_human_color(nextColor);
+        boardFlipped = (nextColor == chess::Black);
         controller.reset_to_start();
+        toastMessage = "Playing as: " + std::string(nextColor == chess::White ? "White" : "Black");
+        toastColor = sf::Color(144, 202, 249);
+        toastTimer = 2.0f;
+    };
+
+    auto toggleFlip = [&]() {
+        boardFlipped = !boardFlipped;
+        toastMessage = boardFlipped ? "Board flipped (Black at bottom)" : "Board normal (White at bottom)";
+        toastColor = sf::Color(200, 200, 200);
+        toastTimer = 1.5f;
     };
 
     auto resetGame = [&]() {
         controller.cancel_ai();
         isPromoting = false;
         controller.reset_to_start();
+        toastMessage = "New game started";
+        toastColor = sf::Color(200, 200, 200);
+        toastTimer = 1.5f;
+    };
+
+    auto saveGame = [&]() {
+        if (controller.save_to_file("pos.txt")) {
+            toastMessage = "Position saved to pos.txt";
+            toastColor = sf::Color(129, 199, 132);
+        } else {
+            toastMessage = "Failed to save pos.txt";
+            toastColor = sf::Color(239, 83, 80);
+        }
+        toastTimer = 2.5f;
+    };
+
+    auto loadGame = [&]() {
+        controller.cancel_ai();
+        isPromoting = false;
+        if (controller.load_from_file("pos.txt")) {
+            toastMessage = "Position loaded from pos.txt";
+            toastColor = sf::Color(129, 199, 132);
+        } else {
+            toastMessage = "Failed to load pos.txt";
+            toastColor = sf::Color(239, 83, 80);
+        }
+        toastTimer = 2.5f;
+    };
+
+    auto resignGame = [&]() {
+        if (controller.get_status() == chess::GameStatus::Active) {
+            chess::Color surr = controller.get_turn();
+            controller.resign(surr);
+            toastMessage = std::string(surr == chess::White ? "White" : "Black") + " surrendered!";
+            toastColor = sf::Color(255, 179, 0);
+            toastTimer = 3.0f;
+        }
     };
 
     while (window.isOpen()) {
+        float dt = frameClock.restart().asSeconds();
+        if (toastTimer > 0.0f) {
+            toastTimer -= dt;
+        }
+
         // Asynchronous AI trigger & polling
         if (controller.is_ai_turn() && !controller.is_ai_thinking() && !isPromoting) {
             controller.start_ai_thinking();
@@ -164,13 +235,14 @@ int main() {
             controller.update_ai_thinking();
         }
 
-        // --- Toolbar button rects (bottom bar) ---
-        constexpr float btnY = boardTop + BoardSize + 38.0f;
-        constexpr float btnHeight = 32.0f;
-        Button btnMode{sf::FloatRect(boardLeft, btnY, 130.0f, btnHeight), ""};
-        Button btnDiff{sf::FloatRect(boardLeft + 140.0f, btnY, 110.0f, btnHeight), ""};
-        Button btnColor{sf::FloatRect(boardLeft + 260.0f, btnY, 110.0f, btnHeight), ""};
-        Button btnReset{sf::FloatRect(boardLeft + 380.0f, btnY, 100.0f, btnHeight), "[R] Reset"};
+        // --- Toolbar Buttons Setup ---
+        // Row 1 (y = 630): Mode, Difficulty, Color, Flip
+        constexpr float btnY1 = boardTop + BoardSize + 30.0f;
+        constexpr float btnHeight = 28.0f;
+        Button btnMode{sf::FloatRect(boardLeft, btnY1, 115.0f, btnHeight), ""};
+        Button btnDiff{sf::FloatRect(boardLeft + 122.0f, btnY1, 115.0f, btnHeight), ""};
+        Button btnColor{sf::FloatRect(boardLeft + 244.0f, btnY1, 115.0f, btnHeight), ""};
+        Button btnFlip{sf::FloatRect(boardLeft + 366.0f, btnY1, 114.0f, btnHeight), boardFlipped ? "[F] Flipped" : "[F] Normal"};
 
         btnMode.text = (controller.get_game_mode() == chess::GameMode::PvP) ? "[M] PvP" : "[M] vs AI";
         if (controller.get_game_mode() == chess::GameMode::PvC) {
@@ -183,6 +255,13 @@ int main() {
             btnColor.text = "[C] ---";
             btnColor.active = false;
         }
+
+        // Row 2 (y = 665): Save, Load, Resign, Reset
+        constexpr float btnY2 = btnY1 + btnHeight + 7.0f;
+        Button btnSave{sf::FloatRect(boardLeft, btnY2, 115.0f, btnHeight), "[S] Save"};
+        Button btnLoad{sf::FloatRect(boardLeft + 122.0f, btnY2, 115.0f, btnHeight), "[L] Load"};
+        Button btnResign{sf::FloatRect(boardLeft + 244.0f, btnY2, 115.0f, btnHeight), "[Q] Resign", controller.get_status() == chess::GameStatus::Active};
+        Button btnReset{sf::FloatRect(boardLeft + 366.0f, btnY2, 114.0f, btnHeight), "[R] Reset"};
 
         sf::Event event;
         while (window.pollEvent(event)) {
@@ -206,18 +285,36 @@ int main() {
                     cycleDifficulty();
                 } else if (event.key.code == sf::Keyboard::C) {
                     toggleHumanColor();
+                } else if (event.key.code == sf::Keyboard::F) {
+                    toggleFlip();
+                } else if (event.key.code == sf::Keyboard::S) {
+                    saveGame();
+                } else if (event.key.code == sf::Keyboard::L) {
+                    loadGame();
+                } else if (event.key.code == sf::Keyboard::Q) {
+                    resignGame();
                 }
             } else if (event.type == sf::Event::MouseButtonPressed && event.mouseButton.button == sf::Mouse::Left) {
                 float mx = static_cast<float>(event.mouseButton.x);
                 float my = static_cast<float>(event.mouseButton.y);
 
-                // Check bottom toolbar button clicks
+                // Row 1 Buttons
                 if (btnMode.bounds.contains(mx, my)) {
                     toggleMode();
                 } else if (btnDiff.active && btnDiff.bounds.contains(mx, my)) {
                     cycleDifficulty();
                 } else if (btnColor.active && btnColor.bounds.contains(mx, my)) {
                     toggleHumanColor();
+                } else if (btnFlip.bounds.contains(mx, my)) {
+                    toggleFlip();
+                }
+                // Row 2 Buttons
+                else if (btnSave.bounds.contains(mx, my)) {
+                    saveGame();
+                } else if (btnLoad.bounds.contains(mx, my)) {
+                    loadGame();
+                } else if (btnResign.active && btnResign.bounds.contains(mx, my)) {
+                    resignGame();
                 } else if (btnReset.bounds.contains(mx, my)) {
                     resetGame();
                 } else if (isPromoting) {
@@ -254,7 +351,7 @@ int main() {
                         int col = static_cast<int>((mx - boardLeft) / SquareSize);
                         int row = static_cast<int>((my - boardTop) / SquareSize);
                         if (col >= 0 && col < 8 && row >= 0 && row < 8) {
-                            chess::Square clickedSq = static_cast<chess::Square>((7 - row) * 8 + col);
+                            chess::Square clickedSq = getSquareAtVisual(row, col);
                             chess::Square currentSelected = controller.get_selected_square();
 
                             if (currentSelected != chess::No_Square) {
@@ -301,7 +398,7 @@ int main() {
         // --- Render Frame ---
         window.clear(sf::Color(30, 33, 36));
 
-        // 1. Draw Title & Status Header
+        // 1. Title & Status Header
         std::string modeTitle = "ChessMaestro - ";
         if (controller.get_game_mode() == chess::GameMode::PvP) {
             modeTitle += "Two-Player Mode";
@@ -314,7 +411,7 @@ int main() {
 
         sf::Text titleText(modeTitle, titleFont, 21);
         titleText.setFillColor(sf::Color(240, 240, 240));
-        centerText(titleText, static_cast<float>(WindowWidth) / 2.0f, 28.0f);
+        centerText(titleText, static_cast<float>(WindowWidth) / 2.0f, 26.0f);
         window.draw(titleText);
 
         std::string statusStr;
@@ -325,7 +422,7 @@ int main() {
             if (controller.is_ai_thinking()) {
                 int dots = (static_cast<int>(animClock.getElapsedTime().asSeconds() * 3)) % 4;
                 statusStr = "AI is thinking" + std::string(dots, '.');
-                statusColor = sf::Color(100, 181, 246); // soft blue
+                statusColor = sf::Color(100, 181, 246);
             } else {
                 statusStr = (controller.get_turn() == chess::White) ? "White to move" : "Black to move";
                 if (controller.is_in_check()) {
@@ -345,51 +442,71 @@ int main() {
         } else if (status == chess::GameStatus::DrawThreefoldRepetition) {
             statusStr = "DRAW by threefold repetition.";
             statusColor = sf::Color(255, 215, 0);
+        } else if (status == chess::GameStatus::Resigned) {
+            statusStr = (controller.get_resigned_player() == chess::White) ? "White surrendered! Black won!" : "Black surrendered! White won!";
+            statusColor = sf::Color(255, 179, 0);
         }
 
         sf::Text statusText(statusStr, titleFont, 18);
         statusText.setFillColor(statusColor);
-        centerText(statusText, static_cast<float>(WindowWidth) / 2.0f, 62.0f);
+        centerText(statusText, static_cast<float>(WindowWidth) / 2.0f, 58.0f);
         window.draw(statusText);
 
-        sf::Text hintText("Click piece to move   |   [M]ode  [D]ifficulty  [C]olor  [R]eset  [Esc]Exit", uiFont, 13);
-        hintText.setFillColor(sf::Color(140, 140, 140));
-        centerText(hintText, static_cast<float>(WindowWidth) / 2.0f, 90.0f);
-        window.draw(hintText);
+        // Toast feedback or quick helper text
+        if (toastTimer > 0.0f && !toastMessage.empty()) {
+            sf::Text toast(toastMessage, titleFont, 13);
+            toast.setFillColor(toastColor);
+            centerText(toast, static_cast<float>(WindowWidth) / 2.0f, 84.0f);
+            window.draw(toast);
+        } else {
+            sf::Text hintText("Click to move | [S]ave [L]oad [F]lip [Q]Resign [R]eset [Esc]Exit", uiFont, 12);
+            hintText.setFillColor(sf::Color(135, 135, 135));
+            centerText(hintText, static_cast<float>(WindowWidth) / 2.0f, 84.0f);
+            window.draw(hintText);
+        }
 
-        // 2. Draw Board Border & Squares
+        // 2. Draw Board Frame & Squares
         sf::RectangleShape boardFrame(sf::Vector2f(BoardSize + 6.0f, BoardSize + 6.0f));
         boardFrame.setPosition(boardLeft - 3.0f, boardTop - 3.0f);
         boardFrame.setFillColor(sf::Color(20, 20, 20));
         window.draw(boardFrame);
 
-        for (const auto& square : boardSquares) {
-            window.draw(square);
+        for (int row = 0; row < 8; ++row) {
+            for (int col = 0; col < 8; ++col) {
+                sf::RectangleShape square(sf::Vector2f(SquareSize, SquareSize));
+                square.setPosition(boardLeft + static_cast<float>(col) * SquareSize,
+                                   boardTop + static_cast<float>(row) * SquareSize);
+                chess::Square sq = getSquareAtVisual(row, col);
+                int parity = (sq / 8 + sq % 8) % 2;
+                square.setFillColor((parity != 0) ? lightSquare : darkSquare);
+                window.draw(square);
+            }
         }
 
-        // Rank labels (1 to 8 on the left)
+        // Rank labels (left)
         for (int row = 0; row < 8; ++row) {
-            sf::Text rankLabel(std::to_string(8 - row), uiFont, 13);
+            int rankNum = boardFlipped ? (1 + row) : (8 - row);
+            sf::Text rankLabel(std::to_string(rankNum), uiFont, 13);
             rankLabel.setFillColor(sf::Color(160, 160, 160));
             centerText(rankLabel, boardLeft - 14.0f, boardTop + (static_cast<float>(row) + 0.5f) * SquareSize);
             window.draw(rankLabel);
         }
 
-        // File labels (a to h on the bottom)
+        // File labels (bottom)
         for (int col = 0; col < 8; ++col) {
-            std::string fileStr(1, static_cast<char>('a' + col));
+            char fileCh = boardFlipped ? static_cast<char>('h' - col) : static_cast<char>('a' + col);
+            std::string fileStr(1, fileCh);
             sf::Text fileLabel(fileStr, uiFont, 13);
             fileLabel.setFillColor(sf::Color(160, 160, 160));
             centerText(fileLabel, boardLeft + (static_cast<float>(col) + 0.5f) * SquareSize, boardTop + BoardSize + 14.0f);
             window.draw(fileLabel);
         }
 
-        // 3. Draw Last Move Highlight
+        // 3. Last Move Highlight
         chess::Move_full_info lastMove = controller.get_last_move();
         if (!lastMove.is_no_move()) {
             for (chess::Square sq : {static_cast<chess::Square>(lastMove.from_square), static_cast<chess::Square>(lastMove.to_square)}) {
-                int col = sq % 8;
-                int row = 7 - (sq / 8);
+                auto [row, col] = getVisualAtSquare(sq);
                 sf::RectangleShape lastMoveHighlight(sf::Vector2f(SquareSize, SquareSize));
                 lastMoveHighlight.setPosition(boardLeft + static_cast<float>(col) * SquareSize,
                                              boardTop + static_cast<float>(row) * SquareSize);
@@ -398,11 +515,10 @@ int main() {
             }
         }
 
-        // 4. Draw Selected Square Highlight
+        // 4. Selected Square Highlight
         chess::Square selectedSq = controller.get_selected_square();
         if (selectedSq != chess::No_Square) {
-            int col = selectedSq % 8;
-            int row = 7 - (selectedSq / 8);
+            auto [row, col] = getVisualAtSquare(selectedSq);
             sf::RectangleShape selectHighlight(sf::Vector2f(SquareSize, SquareSize));
             selectHighlight.setPosition(boardLeft + static_cast<float>(col) * SquareSize,
                                         boardTop + static_cast<float>(row) * SquareSize);
@@ -410,12 +526,11 @@ int main() {
             window.draw(selectHighlight);
         }
 
-        // 5. Draw In-Check King Highlight
+        // 5. In-Check King Highlight
         if (controller.is_in_check() && status == chess::GameStatus::Active) {
             chess::Square kingSq = controller.get_king_square(controller.get_turn());
             if (kingSq != chess::No_Square) {
-                int col = kingSq % 8;
-                int row = 7 - (kingSq / 8);
+                auto [row, col] = getVisualAtSquare(kingSq);
                 sf::RectangleShape checkHighlight(sf::Vector2f(SquareSize, SquareSize));
                 checkHighlight.setPosition(boardLeft + static_cast<float>(col) * SquareSize,
                                            boardTop + static_cast<float>(row) * SquareSize);
@@ -427,7 +542,7 @@ int main() {
         // 6. Draw Pieces
         for (int row = 0; row < 8; ++row) {
             for (int col = 0; col < 8; ++col) {
-                chess::Square sq = static_cast<chess::Square>((7 - row) * 8 + col);
+                chess::Square sq = getSquareAtVisual(row, col);
                 chess::Piece piece = controller.get_piece_at(sq);
                 if (piece != chess::No_Piece) {
                     sf::Sprite sprite(pieceTextures[static_cast<size_t>(piece)]);
@@ -439,17 +554,15 @@ int main() {
             }
         }
 
-        // 7. Draw Legal Move Indicators (over pieces for clear visibility)
+        // 7. Legal Move Indicators
         if (selectedSq != chess::No_Square && status == chess::GameStatus::Active) {
             auto legalMoves = controller.get_legal_moves_from(selectedSq);
             for (const auto& m : legalMoves) {
-                int col = m.to_square % 8;
-                int row = 7 - (m.to_square / 8);
+                auto [row, col] = getVisualAtSquare(static_cast<chess::Square>(m.to_square));
                 float centerX = boardLeft + (static_cast<float>(col) + 0.5f) * SquareSize;
                 float centerY = boardTop + (static_cast<float>(row) + 0.5f) * SquareSize;
 
                 if (controller.get_piece_at(static_cast<chess::Square>(m.to_square)) != chess::No_Piece || m.special == chess::SP_en_passant) {
-                    // Capture target: outer ring
                     constexpr float ringRadius = SquareSize * 0.42f;
                     sf::CircleShape ring(ringRadius);
                     ring.setOrigin(ringRadius, ringRadius);
@@ -459,7 +572,6 @@ int main() {
                     ring.setOutlineColor(sf::Color(239, 83, 80, 200));
                     window.draw(ring);
                 } else {
-                    // Quiet move target: small translucent green dot
                     constexpr float dotRadius = SquareSize * 0.16f;
                     sf::CircleShape dot(dotRadius);
                     dot.setOrigin(dotRadius, dotRadius);
@@ -470,7 +582,7 @@ int main() {
             }
         }
 
-        // 8. Draw Promotion Modal Dialog
+        // 8. Promotion Modal Dialog
         if (isPromoting) {
             sf::RectangleShape modalDim(sf::Vector2f(WindowWidth, WindowHeight));
             modalDim.setFillColor(sf::Color(0, 0, 0, 150));
@@ -521,9 +633,9 @@ int main() {
             }
         }
 
-        // 9. Draw Game Over Overlay Card
+        // 9. Game Over Overlay Card
         if (status != chess::GameStatus::Active && !isPromoting) {
-            constexpr float bannerWidth = 340.0f;
+            constexpr float bannerWidth = 360.0f;
             constexpr float bannerHeight = 85.0f;
             float bannerX = (static_cast<float>(WindowWidth) - bannerWidth) / 2.0f;
             float bannerY = boardTop + (BoardSize - bannerHeight) / 2.0f;
@@ -546,7 +658,7 @@ int main() {
             window.draw(playAgain);
         }
 
-        // 10. Draw Bottom Toolbar Buttons
+        // 10. Toolbar Buttons
         auto drawButton = [&](const Button& btn) {
             sf::RectangleShape bShape(sf::Vector2f(btn.bounds.width, btn.bounds.height));
             bShape.setPosition(btn.bounds.left, btn.bounds.top);
@@ -555,15 +667,22 @@ int main() {
             bShape.setOutlineColor(btn.active ? sf::Color(70, 80, 92) : sf::Color(50, 53, 56));
             window.draw(bShape);
 
-            sf::Text bText(btn.text, uiFont, 13);
+            sf::Text bText(btn.text, uiFont, 12);
             bText.setFillColor(btn.active ? sf::Color(220, 220, 220) : sf::Color(100, 100, 100));
             centerText(bText, btn.bounds.left + btn.bounds.width / 2.0f, btn.bounds.top + btn.bounds.height / 2.0f);
             window.draw(bText);
         };
 
+        // Row 1
         drawButton(btnMode);
         drawButton(btnDiff);
         drawButton(btnColor);
+        drawButton(btnFlip);
+
+        // Row 2
+        drawButton(btnSave);
+        drawButton(btnLoad);
+        drawButton(btnResign);
         drawButton(btnReset);
 
         window.display();
