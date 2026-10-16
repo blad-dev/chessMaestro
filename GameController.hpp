@@ -62,6 +62,16 @@ private:
     Move_full_info last_move{};
     Color resigned_player = White;
 
+    struct MoveHistoryEntry {
+        Move_full_info move;
+        Accumulator accumulator;
+        Color mover_color;
+        Boardlist<103> prev_boardlist;
+        int prev_hash_count;
+        Move_full_info prev_last_move;
+    };
+    std::vector<MoveHistoryEntry> move_history;
+
     inline const static std::string START_POS = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
     void regenerate_all_legal_moves() {
@@ -131,12 +141,14 @@ public:
 
     void reset_to_start() {
         cancel_ai();
+        move_history.clear();
         if (bot) bot->clear_hash();
         load_fen(START_POS);
     }
 
     bool load_fen(const std::string& fen) {
         cancel_ai();
+        move_history.clear();
         try {
             board.clear_board();
             parser.parse_from_FEN(fen, board);
@@ -415,6 +427,13 @@ public:
 
         const Move_full_info move_to_apply = *matched_move;
 
+        MoveHistoryEntry history_entry;
+        history_entry.move = move_to_apply;
+        history_entry.mover_color = board.get_turn();
+        history_entry.prev_boardlist = boardlist;
+        history_entry.prev_hash_count = hashlist_ref.count();
+        history_entry.prev_last_move = last_move;
+
         if ((board[move_to_apply.from_square] == W_Pawn) || 
             (board[move_to_apply.from_square] == B_Pawn) || 
             (board[move_to_apply.to_square] != No_Piece)) {
@@ -423,10 +442,12 @@ public:
         }
 
         if (board.get_turn() == White) {
-            board.make_move<White>(move_to_apply);
+            history_entry.accumulator = board.make_move<White>(move_to_apply);
         } else {
-            board.make_move<Black>(move_to_apply);
+            history_entry.accumulator = board.make_move<Black>(move_to_apply);
         }
+
+        move_history.push_back(history_entry);
 
         boardlist.push(board);
         hashlist_ref.add(board.get_hash());
@@ -442,6 +463,69 @@ public:
         return make_move(static_cast<Square>(move.from_square), 
                          static_cast<Square>(move.to_square), 
                          move.promotion);
+    }
+
+    bool undo_move() {
+        if (move_history.empty()) return false;
+
+        cancel_ai();
+
+        MoveHistoryEntry entry = move_history.back();
+        move_history.pop_back();
+
+        if (entry.mover_color == White) {
+            board.undo_move<White>(entry.move, entry.accumulator);
+        } else {
+            board.undo_move<Black>(entry.move, entry.accumulator);
+        }
+
+        boardlist = entry.prev_boardlist;
+        hashlist_ref.end = hashlist_ref.begin + entry.prev_hash_count;
+        last_move = entry.prev_last_move;
+        selected_square = No_Square;
+        status = GameStatus::Active;
+
+        evaluate_game_status();
+        return true;
+    }
+
+    size_t get_history_size() const {
+        return move_history.size();
+    }
+
+    bool can_take_move_back() const {
+        if (game_mode == GameMode::PvP) {
+            return !move_history.empty();
+        } else {
+            // PvC
+            if (ai_thinking) {
+                return !move_history.empty();
+            } else if (board.get_turn() == human_color) {
+                return move_history.size() >= 2;
+            } else {
+                return !move_history.empty();
+            }
+        }
+    }
+
+    bool take_move_back() {
+        if (!can_take_move_back()) return false;
+
+        if (game_mode == GameMode::PvP) {
+            return undo_move();
+        } else {
+            // PvC
+            if (ai_thinking) {
+                cancel_ai();
+                return undo_move();
+            } else if (board.get_turn() == human_color) {
+                undo_move();
+                undo_move();
+                return true;
+            } else {
+                return undo_move();
+            }
+        }
     }
 };
 

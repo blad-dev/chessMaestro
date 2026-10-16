@@ -158,7 +158,7 @@ int main() {
             controller.set_ai_difficulty(chess::Normal);
             diffName = "Normal";
         } else if (diff == chess::Normal) {
-            controller.set_ai_difficulty(chess::Hard);
+            controller.set_ai_difficulty( chess::Hard);
             diffName = "Hard";
         } else {
             controller.set_ai_difficulty(chess::Easy);
@@ -270,6 +270,34 @@ int main() {
         }
     };
 
+    auto takeMoveBack = [&]() {
+        if (!controller.can_take_move_back()) {
+            toastMessage = "No moves to take back";
+            toastColor = sf::Color(200, 200, 200);
+            toastTimer = 1.5f;
+            return;
+        }
+
+        if (controller.take_move_back()) {
+            isPromoting = false;
+            controller.deselect();
+
+            if (autoFlip) {
+                if (controller.get_game_mode() == chess::GameMode::PvP) {
+                    bool desiredFlipped = (controller.get_turn() == chess::Black);
+                    if (boardFlipped != desiredFlipped) boardFlipped = desiredFlipped;
+                } else if (controller.get_game_mode() == chess::GameMode::PvC) {
+                    bool desiredFlipped = (controller.get_human_color() == chess::Black);
+                    if (boardFlipped != desiredFlipped) boardFlipped = desiredFlipped;
+                }
+            }
+
+            toastMessage = "Move taken back";
+            toastColor = sf::Color(144, 202, 249);
+            toastTimer = 1.5f;
+        }
+    };
+
     while (window.isOpen()) {
         float dt = frameClock.restart().asSeconds();
         if (toastTimer > 0.0f) {
@@ -314,12 +342,13 @@ int main() {
             btnColor.active = false;
         }
 
-        // Row 2 (y = 665): Save, Load, Resign, Reset
+        // Row 2 (y = 665): Take Back, Save, Load, Resign, Reset
         constexpr float btnY2 = btnY1 + btnHeight + 7.0f;
-        Button btnSave{sf::FloatRect(boardLeft, btnY2, 115.0f, btnHeight), "[S] Save"};
-        Button btnLoad{sf::FloatRect(boardLeft + 122.0f, btnY2, 115.0f, btnHeight), "[L] Load"};
-        Button btnResign{sf::FloatRect(boardLeft + 244.0f, btnY2, 115.0f, btnHeight), "[Q] Resign", controller.get_status() == chess::GameStatus::Active};
-        Button btnReset{sf::FloatRect(boardLeft + 366.0f, btnY2, 114.0f, btnHeight), "[R] Reset"};
+        Button btnUndo{sf::FloatRect(boardLeft, btnY2, 110.0f, btnHeight), "[U] Take Back", controller.can_take_move_back()};
+        Button btnSave{sf::FloatRect(boardLeft + 116.0f, btnY2, 80.0f, btnHeight), "[S] Save"};
+        Button btnLoad{sf::FloatRect(boardLeft + 202.0f, btnY2, 80.0f, btnHeight), "[L] Load"};
+        Button btnResign{sf::FloatRect(boardLeft + 288.0f, btnY2, 92.0f, btnHeight), "[Q] Resign", controller.get_status() == chess::GameStatus::Active};
+        Button btnReset{sf::FloatRect(boardLeft + 386.0f, btnY2, 94.0f, btnHeight), "[R] Reset"};
 
         sf::Event event;
         while (window.pollEvent(event)) {
@@ -347,6 +376,8 @@ int main() {
                     toggleFlip();
                 } else if (event.key.code == sf::Keyboard::A) {
                     toggleAutoFlip();
+                } else if (event.key.code == sf::Keyboard::U || event.key.code == sf::Keyboard::Z) {
+                    takeMoveBack();
                 } else if (event.key.code == sf::Keyboard::S) {
                     saveGame();
                 } else if (event.key.code == sf::Keyboard::L) {
@@ -371,7 +402,9 @@ int main() {
                     toggleAutoFlip();
                 }
                 // Row 2 Buttons
-                else if (btnSave.bounds.contains(mx, my)) {
+                else if (btnUndo.active && btnUndo.bounds.contains(mx, my)) {
+                    takeMoveBack();
+                } else if (btnSave.bounds.contains(mx, my)) {
                     saveGame();
                 } else if (btnLoad.bounds.contains(mx, my)) {
                     loadGame();
@@ -525,7 +558,7 @@ int main() {
             centerText(toast, static_cast<float>(WindowWidth) / 2.0f, 84.0f);
             window.draw(toast);
         } else {
-            sf::Text hintText("Click to move | [S]ave [L]oad [F]lip [A]uto-flip [Q]Resign [R]eset [Esc]Exit", uiFont, 12);
+            sf::Text hintText("Click to move | [U]TakeBack [S]ave [L]oad [F]lip [A]uto-flip [Q]Resign [R]eset", uiFont, 12);
             hintText.setFillColor(sf::Color(135, 135, 135));
             centerText(hintText, static_cast<float>(WindowWidth) / 2.0f, 84.0f);
             window.draw(hintText);
@@ -762,6 +795,7 @@ int main() {
         drawButton(btnAutoFlip);
 
         // Row 2
+        drawButton(btnUndo);
         drawButton(btnSave);
         drawButton(btnLoad);
         drawButton(btnResign);
