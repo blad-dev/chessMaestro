@@ -269,6 +269,45 @@ void test_ai_integration() {
     std::cout << "[PASS] test_ai_integration\n";
 }
 
+void test_persistence_and_interoperability() {
+    GameController gc1;
+    assert(gc1.make_move(SQ_E2, SQ_E4));
+    assert(gc1.make_move(SQ_C7, SQ_C5));
+    assert(gc1.make_move(SQ_G1, SQ_F3));
+    assert(gc1.make_move(SQ_D7, SQ_D6));
+
+    const std::string filename = "pos_interop_test.txt";
+    assert(gc1.save_to_file(filename));
+
+    // Verify file content has valid FEN structure
+    std::ifstream infile(filename);
+    assert(infile.is_open());
+    std::string fen;
+    std::getline(infile, fen);
+    infile.close();
+    assert(!fen.empty());
+    std::cout << "  Saved FEN: " << fen << '\n';
+    assert(fen.find("w KQkq - 0 5") != std::string::npos || fen.find("w KQkq -") != std::string::npos);
+
+    // Verify loading into fresh controller
+    GameController gc2;
+    assert(gc2.load_from_file(filename));
+    assert(gc2.get_piece_at(SQ_E4) == W_Pawn);
+    assert(gc2.get_piece_at(SQ_C5) == B_Pawn);
+    assert(gc2.get_piece_at(SQ_F3) == W_Knight);
+    assert(gc2.get_piece_at(SQ_D6) == B_Pawn);
+    assert(gc2.get_turn() == White);
+    assert(gc2.get_status() == GameStatus::Active);
+
+    // Verify resignation
+    gc2.resign(White);
+    assert(gc2.get_status() == GameStatus::Resigned);
+    assert(gc2.get_resigned_player() == White);
+
+    std::remove(filename.c_str());
+    std::cout << "[PASS] test_persistence_and_interoperability\n";
+}
+
 int main() {
     std::cout << "Running GameController Unit Tests...\n";
     test_initial_position();
@@ -279,6 +318,7 @@ int main() {
     test_en_passant();
     test_stalemate_and_fen_persistence();
     test_ai_integration();
+    test_persistence_and_interoperability();
     std::cout << "All GameController Unit Tests Passed Successfully!\n";
     return 0;
 }
