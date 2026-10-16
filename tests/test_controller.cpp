@@ -308,6 +308,59 @@ void test_persistence_and_interoperability() {
     std::cout << "[PASS] test_persistence_and_interoperability\n";
 }
 
+void test_difficulty_change_without_reset() {
+    GameController gc;
+    gc.set_game_mode(GameMode::PvC);
+    gc.set_ai_difficulty(Easy);
+    gc.set_human_color(White);
+
+    // Make moves
+    assert(gc.make_move(SQ_E2, SQ_E4));
+    assert(gc.make_move(SQ_C7, SQ_C5));
+    assert(gc.make_move(SQ_G1, SQ_F3));
+
+    // 1. Change difficulty during player's turn without resetting
+    assert(gc.get_turn() == Black);
+    gc.set_ai_difficulty(Hard);
+    assert(gc.get_ai_difficulty() == Hard);
+    assert(gc.get_piece_at(SQ_E4) == W_Pawn);
+    assert(gc.get_piece_at(SQ_C5) == B_Pawn);
+    assert(gc.get_piece_at(SQ_F3) == W_Knight);
+
+    // 2. Change difficulty while AI is thinking
+    assert(gc.is_ai_turn());
+    gc.start_ai_thinking();
+    assert(gc.is_ai_thinking());
+
+    // Switch difficulty mid-search to Easy
+    bool wasThinking = gc.is_ai_thinking();
+    gc.cancel_ai();
+    assert(!gc.is_ai_thinking());
+    gc.set_ai_difficulty(Easy);
+    assert(gc.get_ai_difficulty() == Easy);
+
+    if (wasThinking && gc.is_ai_turn()) {
+        gc.start_ai_thinking();
+    }
+    assert(gc.is_ai_thinking());
+
+    int poll_count = 0;
+    while (!gc.update_ai_thinking()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        ++poll_count;
+        assert(poll_count < 1000);
+    }
+
+    assert(!gc.is_ai_thinking());
+    assert(gc.get_turn() == White); // AI finished its move at Easy difficulty
+    assert(!gc.get_last_move().is_no_move());
+    // Position still contains earlier moves
+    assert(gc.get_piece_at(SQ_E4) == W_Pawn);
+    assert(gc.get_piece_at(SQ_F3) == W_Knight);
+
+    std::cout << "[PASS] test_difficulty_change_without_reset\n";
+}
+
 int main() {
     std::cout << "Running GameController Unit Tests...\n";
     test_initial_position();
@@ -319,6 +372,7 @@ int main() {
     test_stalemate_and_fen_persistence();
     test_ai_integration();
     test_persistence_and_interoperability();
+    test_difficulty_change_without_reset();
     std::cout << "All GameController Unit Tests Passed Successfully!\n";
     return 0;
 }
